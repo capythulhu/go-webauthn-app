@@ -22,9 +22,32 @@
         <button onclick="login()">Login with Passkey</button>
     </div>
 
+    <div id="compute-section" style="display:none;">
+        <h2>Compute N + M</h2>
+        <label for="m-value">Enter M:</label>
+        <input type="number" id="m-value" /><br/>
+        <button onclick="compute()">Compute N + M</button>
+    </div>
+
     <script>
+        let storedPublicKey = null;
+        let loggedInUsername = null;
+
+        async function hashUsername(username) {
+            const encoder = new TextEncoder();
+            const data = encoder.encode(username);
+            const hashBuffer = await window.crypto.subtle.digest('SHA-256', data);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
         function bufferToBase64url(buffer) {
-            return btoa(String.fromCharCode(...new Uint8Array(buffer)))
+            const bytes = new Uint8Array(buffer);
+            let binary = '';
+            for (let i = 0; i < bytes.byteLength; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            return btoa(binary)
                 .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
         }
 
@@ -37,6 +60,16 @@
             return Uint8Array.from([...rawData].map((char) => char.charCodeAt(0)));
         }
 
+        function base64StringToArrayBuffer(b64str) {
+            const binary_string = window.atob(b64str);
+            const len = binary_string.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binary_string.charCodeAt(i);
+            }
+            return bytes.buffer;
+        }
+
         async function register() {
             try {
                 const username = document.getElementById('register-username').value.trim();
@@ -47,10 +80,12 @@
                     return;
                 }
 
+                const hashedUsername = await hashUsername(username);
+
                 const beginResponse = await fetch('/register/begin', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, displayName })
+                    body: JSON.stringify({ username: hashedUsername, displayName })
                 });
 
                 if (!beginResponse.ok) {
@@ -85,7 +120,7 @@
                 const finishResponse = await fetch('/register/finish', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, attestationResponse })
+                    body: JSON.stringify({ username: hashedUsername, attestationResponse })
                 });
 
                 if (!finishResponse.ok) {
@@ -109,10 +144,12 @@
                     return;
                 }
 
+                const hashedUsername = await hashUsername(username);
+
                 const beginResponse = await fetch('/login/begin', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username })
+                    body: JSON.stringify({ username: hashedUsername })
                 });
 
                 if (!beginResponse.ok) {
@@ -148,18 +185,95 @@
                 const finishResponse = await fetch('/login/finish', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, assertionResponse })
+                    body: JSON.stringify({ username: hashedUsername, assertionResponse })
                 });
 
+                const finishResult = await finishResponse.json();
+
                 if (!finishResponse.ok) {
-                    const errorResponse = await finishResponse.json();
-                    throw new Error(errorResponse.error);
+                    throw new Error(finishResult.error);
                 }
 
                 alert('Login successful!');
+
+                // Get the public key from the server response
+                const publicKeyBase64 = finishResult.publicKey;
+                const publicKeyDer = base64StringToArrayBuffer(publicKeyBase64);
+
+                // Import the public key
+                storedPublicKey = await window.crypto.subtle.importKey(
+                    'spki',
+                    publicKeyDer,
+                    {
+                        name: 'RSA-OAEP',
+                        hash: 'SHA-256',
+                    },
+                    true,
+                    ['encrypt']
+                );
+
+                // Store the hashed username for later use
+                loggedInUsername = hashedUsername;
+
+                // Show the compute section
+                document.getElementById('compute-section').style.display = 'block';
+
             } catch (err) {
                 console.error(err);
                 alert('Login failed: ' + err.message);
+            }
+        }
+
+        async function compute() {
+            try {
+                const mValue = document.getElementById('m-value').value.trim();
+
+                if (!mValue) {
+                    alert('Please enter a value for M.');
+                    return;
+                }
+
+                const mInt = parseInt(mValue, 10);
+                if (isNaN(mInt)) {
+                    alert('Please enter a valid integer for M.');
+                    return;
+                }
+
+                // Convert M to ArrayBuffer
+                const mBuffer = new TextEncoder().encode(mValue);
+
+                // Encrypt M with the stored public key
+                const encryptedM = await window.crypto.subtle.encrypt(
+                    {
+                        name: 'RSA-OAEP',
+                    },
+                    storedPublicKey,
+                    mBuffer
+                );
+
+                // Convert encrypted M to base64
+                const encryptedMBase64 = bufferToBase64url(encryptedM);
+
+                // Send encrypted M and username to the server
+                const response = await fetch('/compute', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username: loggedInUsername,
+                        m_encrypted: encryptedMBase64
+                    })
+                });
+
+                if (!response.ok) {
+                    const errorResponse = await response.json();
+                    throw new Error(errorResponse.error);
+                }
+
+                const result = await response.json();
+                alert('N + M = ' + result.n_plus_m);
+            } catch (err) {
+                console.error(err);
+                alert('Computation failed: ' + err.message);
             }
         }
     </script>
