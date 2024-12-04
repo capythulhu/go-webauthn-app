@@ -1,23 +1,34 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Go WebAuthn App</title>
+    <title>Global Wallet</title>
 </head>
 <body>
-    <h1>Go WebAuthn App</h1>
+    <h1>Global Wallet</h1>
 
-    <button onclick="register()">Register Passkey</button>
-    <button onclick="login()">Login with Passkey</button>
+    <div>
+        <h2>Register</h2>
+        <label for="register-username">Username:</label>
+        <input type="text" id="register-username" /><br/>
+        <label for="register-displayname">Display Name:</label>
+        <input type="text" id="register-displayname" /><br/>
+        <button onclick="register()">Register Passkey</button>
+    </div>
+
+    <div>
+        <h2>Login</h2>
+        <label for="login-username">Username:</label>
+        <input type="text" id="login-username" /><br/>
+        <button onclick="login()">Login with Passkey</button>
+    </div>
 
     <script>
         function bufferToBase64url(buffer) {
-            // Convert a buffer to a Base64URL encoded string
             return btoa(String.fromCharCode(...new Uint8Array(buffer)))
                 .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
         }
 
         function base64urlToBuffer(base64urlString) {
-            // Convert a Base64URL encoded string to a buffer
             const padding = '='.repeat((4 - base64urlString.length % 4) % 4);
             const base64 = (base64urlString + padding)
                 .replace(/-/g, '+')
@@ -28,13 +39,28 @@
 
         async function register() {
             try {
-                const response = await fetch('/register/begin', { method: 'POST' });
-                const options = await response.json();
+                const username = document.getElementById('register-username').value.trim();
+                const displayName = document.getElementById('register-displayname').value.trim();
 
-                // Extract the publicKey options from the response
+                if (!username || !displayName) {
+                    alert('Please provide both username and display name.');
+                    return;
+                }
+
+                const beginResponse = await fetch('/register/begin', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, displayName })
+                });
+
+                if (!beginResponse.ok) {
+                    const errorResponse = await beginResponse.json();
+                    throw new Error(errorResponse.error);
+                }
+
+                const options = await beginResponse.json();
                 const publicKeyOptions = options.publicKey;
 
-                // Convert Base64URL strings to ArrayBuffers
                 publicKeyOptions.challenge = base64urlToBuffer(publicKeyOptions.challenge);
                 publicKeyOptions.user.id = base64urlToBuffer(publicKeyOptions.user.id);
 
@@ -59,10 +85,13 @@
                 const finishResponse = await fetch('/register/finish', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(attestationResponse)
+                    body: JSON.stringify({ username, attestationResponse })
                 });
 
-                const finishResult = await finishResponse.json();
+                if (!finishResponse.ok) {
+                    const errorResponse = await finishResponse.json();
+                    throw new Error(errorResponse.error);
+                }
 
                 alert('Registration successful!');
             } catch (err) {
@@ -73,12 +102,27 @@
 
         async function login() {
             try {
-                const response = await fetch('/login/begin', { method: 'POST' });
-                const options = await response.json();
+                const username = document.getElementById('login-username').value.trim();
 
+                if (!username) {
+                    alert('Please provide a username.');
+                    return;
+                }
+
+                const beginResponse = await fetch('/login/begin', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username })
+                });
+
+                if (!beginResponse.ok) {
+                    const errorResponse = await beginResponse.json();
+                    throw new Error(errorResponse.error);
+                }
+
+                const options = await beginResponse.json();
                 const publicKeyOptions = options.publicKey;
 
-                // Convert Base64URL strings to ArrayBuffers
                 publicKeyOptions.challenge = base64urlToBuffer(publicKeyOptions.challenge);
 
                 if (publicKeyOptions.allowCredentials) {
@@ -104,10 +148,13 @@
                 const finishResponse = await fetch('/login/finish', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(assertionResponse)
+                    body: JSON.stringify({ username, assertionResponse })
                 });
 
-                const finishResult = await finishResponse.json();
+                if (!finishResponse.ok) {
+                    const errorResponse = await finishResponse.json();
+                    throw new Error(errorResponse.error);
+                }
 
                 alert('Login successful!');
             } catch (err) {
